@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sisi (Modelling with Classes)</title>
+</head>
+<body>
+<h1>Sisi</h1>
+
+<script>
+/*
+  Sisi is a public participation platform for Kenya.
+  There is no interface here, just the data model. Citizens register,
+  projects get created, votes and feedback get recorded, and every rule
+  below is enforced inside the class itself, not by the test script that
+  calls it. Each acceptance check is proven with a console.log below.
+*/
+
+
+/* Part A and B: Citizen */
+class Citizen {
+  // Static members belong to the class, not to any one citizen.
+  static #nextId = 1;
+  static #registeredCount = 0;
+  static SUPPORTED_COUNTIES = ["Nairobi", "Mombasa", "Kisumu", "Nakuru"];
+
+  static isCountySupported(county) {
+    return Citizen.SUPPORTED_COUNTIES.includes(county);
+  }
+
+  static get registeredCount() {
+    return Citizen.#registeredCount;
+  }
+
+  constructor(name, county) {
+    if (!Citizen.isCountySupported(county)) {
+      throw new Error(`Cannot register citizen: "${county}" is not a Sisi supported county.`);
+    }
+    this.name = name;
+    this.county = county;
+    this.id = Citizen.#nextId++;
+    Citizen.#registeredCount++;
+  }
+
+  describe() {
+    return `${this.name} from ${this.county}`;
+  }
+}
+
+
+/* Part C: Project */
+class Project {
+  static #nextId = 1;
+
+  constructor(title, budgetKsh) {
+    this.id = Project.#nextId++;
+    this.title = title;
+    this.budgetKsh = budgetKsh;
+
+    // Sets make membership checking cheap, so "has this citizen already
+    // voted" is a single lookup. The refusal logic in vote() is what
+    // actually enforces the one vote rule.
+    this._supporters = new Set();
+    this._opposers = new Set();
+    this._feedback = [];
+  }
+
+  hasVoted(citizen) {
+    return this._supporters.has(citizen.id) || this._opposers.has(citizen.id);
+  }
+
+  vote(citizen, choice) {
+    if (choice !== "support" && choice !== "oppose") {
+      console.log(`  Refused: "${choice}" is not a valid vote. Must be support or oppose.`);
+      return false;
+    }
+    if (this.hasVoted(citizen)) {
+      console.log(`  Refused: ${citizen.name} has already voted on "${this.title}".`);
+      return false;
+    }
+    if (choice === "support") {
+      this._supporters.add(citizen.id);
+    } else {
+      this._opposers.add(citizen.id);
+    }
+    console.log(`  Recorded: ${citizen.name} voted "${choice}" on "${this.title}".`);
+    return true;
+  }
+
+  addFeedback(citizen, text) {
+    if (!text || !text.trim()) {
+      console.log(`  Refused: blank feedback from ${citizen.name} on "${this.title}".`);
+      return false;
+    }
+    this._feedback.push({ citizenName: citizen.name, text: text.trim() });
+    console.log(`  Recorded: feedback from ${citizen.name} on "${this.title}".`);
+    return true;
+  }
+
+  get feedback() {
+    return this._feedback;
+  }
+
+  getResults() {
+    const supportCount = this._supporters.size;
+    const opposeCount = this._opposers.size;
+    const totalVotes = supportCount + opposeCount;
+    const supportPercentage = totalVotes === 0 ? 0 : Math.round((supportCount / totalVotes) * 100);
+    return { supportCount, opposeCount, supportPercentage };
+  }
+
+  // A getter is read like a property, no brackets: someProject.level
+  get level() {
+    return "National";
+  }
+}
+
+
+/* Part D: CountyProject extends Project */
+class CountyProject extends Project {
+  constructor(title, budgetKsh, county) {
+    if (!Citizen.isCountySupported(county)) {
+      throw new Error(`Cannot create county project: "${county}" is not a Sisi supported county.`);
+    }
+    super(title, budgetKsh);
+    this.county = county;
+  }
+
+  // Only citizens registered in this project's county may vote here.
+  // The one vote per citizen rule is not rewritten. It still lives in
+  // Project.vote(), called through super.vote().
+  vote(citizen, choice) {
+    if (citizen.county !== this.county) {
+      console.log(`  Refused: ${citizen.name} (${citizen.county}) may not vote on the ${this.county} project "${this.title}".`);
+      return false;
+    }
+    return super.vote(citizen, choice);
+  }
+
+  get level() {
+    return `${this.county} County`;
+  }
+}
+
+
+/* Part E: Portal, built from composition rather than inheritance */
+class Portal {
+  constructor() {
+    this.citizens = [];
+    this.projects = [];
+    this.loggedInCitizenId = null;
+  }
+
+  registerCitizen(name, county) {
+    const citizen = new Citizen(name, county);
+    this.citizens.push(citizen);
+    return citizen;
+  }
+
+  login(citizenId) {
+    const citizen = this.citizens.find(c => c.id === citizenId);
+    if (!citizen) {
+      console.log(`  Refused: no citizen with id ${citizenId}, cannot log in.`);
+      return false;
+    }
+    this.loggedInCitizenId = citizenId;
+    console.log(`  Logged in as ${citizen.name} (${citizen.county}).`);
+    return true;
+  }
+
+  get loggedInCitizen() {
+    return this.citizens.find(c => c.id === this.loggedInCitizenId) || null;
+  }
+
+  addProject(project) {
+    this.projects.push(project);
+    return project;
+  }
+
+  findProjectById(id) {
+    return this.projects.find(p => p.id === id) || null;
+  }
+
+  listAllProjects() {
+    return this.projects;
+  }
+
+  listNationalProjects() {
+    return this.projects.filter(p => !(p instanceof CountyProject));
+  }
+
+  listMyCountyProjects() {
+    const me = this.loggedInCitizen;
+    if (!me) return [];
+    return this.projects.filter(p => p instanceof CountyProject && p.county === me.county);
+  }
+
+  voteOnProject(projectId, choice) {
+    const me = this.loggedInCitizen;
+    if (!me) {
+      console.log(`  Refused: nobody is logged in, cannot vote.`);
+      return false;
+    }
+    const project = this.findProjectById(projectId);
+    if (!project) {
+      console.log(`  Refused: no project with id ${projectId}.`);
+      return false;
+    }
+    return project.vote(me, choice);
+  }
+
+  giveFeedback(projectId, text) {
+    const me = this.loggedInCitizen;
+    if (!me) {
+      console.log(`  Refused: nobody is logged in, cannot give feedback.`);
+      return false;
+    }
+    const project = this.findProjectById(projectId);
+    if (!project) {
+      console.log(`  Refused: no project with id ${projectId}.`);
+      return false;
+    }
+    return project.addFeedback(me, text);
+  }
+
+  getTopProject() {
+    if (this.projects.length === 0) return null;
+    return this.projects.reduce((best, p) =>
+      p.getResults().supportPercentage > best.getResults().supportPercentage ? p : best
+    , this.projects[0]);
+  }
+}
+
+
+/* Test script. Every acceptance check is labelled and proven below. */
+
+const portal = new Portal();
+
+console.log("Loading test data");
+const housing = portal.addProject(new Project("Affordable Housing Phase 3", 5_000_000_000));
+const nairobiMarket = portal.addProject(new CountyProject("Market Upgrade", 120_000_000, "Nairobi"));
+const mombasaFerry = portal.addProject(new CountyProject("Ferry Walkway", 80_000_000, "Mombasa"));
+const kisumuLights = portal.addProject(new CountyProject("Lakefront Street Lights", 45_000_000, "Kisumu"));
+
+console.log("\nCheck 1: three citizens get ids 1, 2, 3 and the class count reads 3");
+const wanjiku = portal.registerCitizen("Wanjiku", "Nairobi");
+const juma = portal.registerCitizen("Juma", "Mombasa");
+const atieno = portal.registerCitizen("Atieno", "Kisumu");
+console.log(`Wanjiku id: ${wanjiku.id}, Juma id: ${juma.id}, Atieno id: ${atieno.id}`);
+console.log(`Citizen.registeredCount = ${Citizen.registeredCount}`);
+
+console.log("\nCheck 2: registering from an unsupported county fails");
+try {
+  portal.registerCitizen("Kioko", "Atlantis");
+} catch (err) {
+  console.log(`  Refused as expected: ${err.message}`);
+}
+
+console.log("\nCheck 3: a Nairobi citizen supports, then tries to oppose. Second vote is refused, counts unchanged");
+portal.login(wanjiku.id);
+portal.voteOnProject(housing.id, "support");
+console.log(`  Results before second vote:`, housing.getResults());
+portal.voteOnProject(housing.id, "oppose");
+console.log(`  Results after second vote attempt, unchanged:`, housing.getResults());
+
+console.log("\nCheck 4: a Mombasa citizen cannot vote on Nairobi's project, a Nairobi citizen can");
+portal.login(juma.id);
+portal.voteOnProject(nairobiMarket.id, "support");
+portal.login(wanjiku.id);
+portal.voteOnProject(nairobiMarket.id, "support");
+
+console.log("\nCheck 5: level getters");
+console.log(`kisumuLights.level = "${kisumuLights.level}"`);
+console.log(`housing.level = "${housing.level}"`);
+
+console.log("\nCheck 6: a county project is a Project");
+console.log(`nairobiMarket instanceof Project = ${nairobiMarket instanceof Project}`);
+
+console.log("\nCheck 7: logged in as a Mombasa citizen, 'my county' returns only Ferry Walkway");
+portal.login(juma.id);
+console.log(portal.listMyCountyProjects().map(p => p.title));
+
+console.log("\nCheck 8: blank feedback refused, real feedback stored with author");
+portal.giveFeedback(mombasaFerry.id, "   ");
+portal.giveFeedback(mombasaFerry.id, "Please add lighting too.");
+console.log(mombasaFerry.feedback);
+
+console.log("\nCheck 9: support percentage on an untouched project is 0 percent, not NaN");
+console.log(kisumuLights.getResults());
+
+console.log("\nCheck 10: the portal reports the top supported project after five or more votes");
+portal.login(atieno.id);
+portal.voteOnProject(kisumuLights.id, "support");
+const mwangi = portal.registerCitizen("Mwangi", "Nairobi");
+portal.login(mwangi.id);
+portal.voteOnProject(housing.id, "support");
+const achieng = portal.registerCitizen("Achieng", "Kisumu");
+portal.login(achieng.id);
+portal.voteOnProject(kisumuLights.id, "support");
+portal.login(juma.id);
+portal.voteOnProject(mombasaFerry.id, "support");
+// Without this last vote every project would sit at 100 percent support,
+// so one dissenting vote is added to make the comparison mean something.
+const otieno = portal.registerCitizen("Otieno", "Nairobi");
+portal.login(otieno.id);
+portal.voteOnProject(nairobiMarket.id, "oppose");
+
+const topProject = portal.getTopProject();
+console.log(`Top project: "${topProject.title}" (${topProject.level}). Results: ${JSON.stringify(topProject.getResults())}`);
+
+
+/* Investigate answers, written for the explanation session */
+console.log(`
+Investigate answers
+
+1. new
+Calling Citizen("Test", "Nairobi") without new throws "TypeError: Class
+constructor Citizen cannot be invoked without 'new'". The new keyword
+creates a fresh object, links its prototype to the class, runs the
+constructor with this bound to that object, and returns it automatically.
+Without new there is no object for this to point at.
+
+2. this
+Inside the constructor, this refers to the specific instance being built
+right now, the one object new just created. If you forget "this." in
+front of a property, for example writing "name = name" instead of
+"this.name = name", you only create or reassign a plain variable. The
+object itself never receives that property, so it reads as undefined later.
+
+3. static
+Citizen.SUPPORTED_COUNTIES, read through the class, returns the array.
+wanjiku.SUPPORTED_COUNTIES, read through an instance, is undefined.
+Static members belong to the class itself, not to the instances'
+prototype chain, so only the class name or another static method can
+reach them.
+
+4. super
+Using this in CountyProject's constructor before calling super() throws
+"ReferenceError: Must call super constructor in derived class before
+accessing 'this' or returning from derived constructor". The parent
+constructor is what actually builds this for a derived class, assigning
+the id and setting up the internal sets and arrays, so there is nothing
+valid to reference until super() has run.
+
+5. Overriding
+JavaScript walks the prototype chain starting at the object's own class
+and runs the first matching method it finds. A CountyProject instance's
+chain is CountyProject, then Project, so its own level getter is found
+first and runs. A plain Project instance has no CountyProject in its
+chain, so Project's level runs for it instead.
+
+6. Where methods live
+No, describe() is not copied into each Citizen object. Both citizens
+share the same function, defined once on Citizen.prototype. This can be
+confirmed by checking wanjiku.hasOwnProperty('describe'), which is
+false, and Object.getPrototypeOf(wanjiku) === Citizen.prototype, which
+is true. The method lives on the shared prototype, not on the instance.
+
+7. Is a versus has a
+CountyProject is a Project. It specialises Project's behaviour and can
+stand in anywhere a Project is expected, which is why instanceof Project
+returns true for it. Portal is not a kind of project at all, it simply
+owns a collection of citizens and a collection of projects. Portal
+extends Project would be the wrong design because a portal cannot
+sensibly be voted on or report a support percentage of its own.
+Inheritance should model is a, not has a or manages a collection of.
+
+8. Where rules live
+Greying out a button is only a hint in the interface. Nothing stops
+someone from calling vote() directly from the console or from a modified
+client. If the one vote rule were enforced only by disabling a button,
+it would be purely cosmetic. Keeping the check inside Project.vote()
+means the rule holds regardless of how or where the method is called, so
+the data stays correct no matter what the interface looks like.
+`);
+</script>
+</body>
+</html>
